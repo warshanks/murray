@@ -16,7 +16,7 @@ UPLOAD_TRACKER_FILE = 'uploaded_files.json'
 def load_uploaded_files():
     """
     Load the dictionary of previously uploaded files from the tracker file.
-    
+
     Returns:
         dict: Dictionary containing file hashes as keys and file paths as values.
     """
@@ -28,7 +28,7 @@ def load_uploaded_files():
 def save_uploaded_files(uploaded_files_dict):
     """
     Save the dictionary of uploaded files to the tracker file.
-    
+
     Args:
         uploaded_files_dict (dict): Dictionary containing file hashes as keys and file paths as values.
     """
@@ -38,10 +38,10 @@ def save_uploaded_files(uploaded_files_dict):
 def process_new_documents(new_files):
     """
     Process a list of newly downloaded files and upload them to AnythingLLM.
-    
+
     Args:
         new_files: List of paths to newly downloaded files
-    
+
     Returns:
         List of successfully uploaded file locations
     """
@@ -70,7 +70,7 @@ def process_new_documents(new_files):
                     f"{ANYTHINGLLM_BASE_URL}/document/upload",
                     headers={'Authorization': f'Bearer {ANYTHINGLLM_API_KEY}'},
                     files=files,
-                    timeout=30
+                    timeout=300
                 )
 
                 if response.status_code == 200:
@@ -92,10 +92,10 @@ def process_new_documents(new_files):
 def upload_documents(directory: str):
     """
     Upload all PDF documents from a specified directory to AnythingLLM.
-    
+
     Args:
         directory (str): Path to the directory containing PDF files.
-    
+
     Returns:
         list: List of successfully uploaded file locations.
     """
@@ -106,11 +106,11 @@ def upload_documents(directory: str):
 def move_files_to_folder(files, target_folder):
     """
     Move files to a specified target folder in AnythingLLM.
-    
+
     Args:
         files (list): List of file paths to move.
         target_folder (str): Target folder path in AnythingLLM.
-    
+
     Returns:
         list: List of new file paths after moving, or None if the operation failed.
     """
@@ -125,7 +125,7 @@ def move_files_to_folder(files, target_folder):
         f"{ANYTHINGLLM_BASE_URL}/document/move-files",
         headers=headers,
         json={"files": moves},
-        timeout=30
+        timeout=300
     )
 
     if response.status_code == 200:
@@ -138,7 +138,7 @@ def move_files_to_folder(files, target_folder):
 def update_workspace_embeddings(workspace_slug, file_paths):
     """
     Update the workspace embeddings for a given workspace slug.
-    
+
     Args:
         workspace_slug (str): The unique identifier for the workspace.
         file_paths (list): List of file paths to update embeddings for.
@@ -155,7 +155,7 @@ def update_workspace_embeddings(workspace_slug, file_paths):
             "adds": file_paths,
             "deletes": []
         },
-        timeout=30
+        timeout=300
     )
 
     if response.status_code == 200:
@@ -166,7 +166,7 @@ def update_workspace_embeddings(workspace_slug, file_paths):
 def main():
     """
     Main function to execute the document upload and workspace update process.
-    
+
     This function performs three main steps:
     1. Uploads documents from the ./documents directory
     2. Moves the uploaded files to the murray folder

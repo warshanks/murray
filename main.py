@@ -1,6 +1,5 @@
 """Main module for running the FIA F1 Document Monitor and Discord bot."""
 
-import argparse
 import os
 import re
 import time
@@ -32,20 +31,21 @@ print(f"TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
 
 bot = commands.Bot(command_prefix='~', intents=discord.Intents.all())
 
-def monitor_documents(url: str, download_dir: str, interval: int = 300):
+def monitor_documents(url: str, download_dir: str):
     """
     Monitor the FIA documents page for new documents and download them.
-    
+
     Args:
         url: The URL to monitor
         download_dir: Directory to save downloaded documents
-        interval: Time between checks in seconds (default: 300 seconds / 5 minutes)
     """
     scraper = Scraper(url, download_dir)
     print(f"Monitoring {url} for new documents...")
     print(f"Downloads will be saved to: {download_dir}")
-    print(f"Checking every {interval} seconds")
+    print(f"Checking every {CHECK_INTERVAL_SECONDS} seconds")
 
+    print("\nStarting monitoring loop...")
+    # Start the monitoring loop
     while True:
         try:
             documents = scraper.fetch_documents()
@@ -74,7 +74,7 @@ def monitor_documents(url: str, download_dir: str, interval: int = 300):
         except Exception as e:
             print(f"\nError: {e}")
 
-        time.sleep(interval)
+        time.sleep(CHECK_INTERVAL_SECONDS)
 
 class MurrayClient(discord.Client):
     """Discord client for handling F1 document queries and responses."""
@@ -110,29 +110,30 @@ class MurrayClient(discord.Client):
             'message': query,
             'mode': 'chat'
         }
-        response = requests.post(ANYTHINGLLM_ENDPOINT, headers=headers, json=data, timeout=30)
+        response = requests.post(ANYTHINGLLM_ENDPOINT, headers=headers, json=data, timeout=300)
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             return f'HTTP error occurred: {e}'
-        print("Raw response content:", response.content)
         try:
             json_response = response.json()
             text_response = json_response.get('textResponse', 'No textResponse field in JSON')
-            
+
             # First, properly handle the escaped newlines
             text_response = text_response.replace('\\n', '\n')
-            
+
             # Remove any triple or more newlines
             text_response = re.sub(r'\n{3,}', '\n\n', text_response)
-            
+
             # Fix formatting for year comparisons
             text_response = re.sub(r'(\*\*\d{4}:\*\*.*?)(?=\s*\*\*\d{4}:|$)', r'\1\n', text_response)
-            
+
             # Ensure proper indentation and spacing for bullet points
             text_response = re.sub(r'(?m)^(\s*)-\s*', r'   - ', text_response)
-            
+            print(f"Murray's response: {text_response}")
             return text_response.strip()
+
+
         except requests.exceptions.JSONDecodeError:
             return 'Failed to parse JSON response from anythingLLM'
 
@@ -141,7 +142,7 @@ async def send_sectioned_response(message, response_content, max_length=2000):
     # Split on double newlines to preserve formatting
     sections = response_content.split('\n\n')
     current_section = ""
-    
+
     for section in sections:
         # If adding this section would exceed the limit
         if len(current_section) + len(section) + 2 > max_length:
@@ -153,27 +154,12 @@ async def send_sectioned_response(message, response_content, max_length=2000):
                 current_section += "\n\n" + section
             else:
                 current_section = section
-    
+
     if current_section:
         await message.reply(current_section.strip())
 
 def main():
     """Initialize and run the FIA F1 Document Monitor and Discord bot."""
-    parser = argparse.ArgumentParser(description="FIA F1 Document Monitor")
-    parser.add_argument(
-        "--url",
-        default=FIA_DOCUMENTS_URL,
-        help="URL to monitor for documents"
-    )
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=CHECK_INTERVAL_SECONDS,
-        help=f"Time between checks in seconds (default: {CHECK_INTERVAL_SECONDS})"
-    )
-
-    args = parser.parse_args()
-
     # Process any existing documents that haven't been uploaded yet
     print("Checking for existing documents that need to be uploaded...")
     uploaded_files = upload_documents(DOWNLOAD_DIRECTORY)
@@ -198,7 +184,7 @@ def main():
             # Start document monitoring in a separate thread
             monitor_thread = threading.Thread(
                 target=monitor_documents,
-                args=(args.url, DOWNLOAD_DIRECTORY, args.interval),
+                args=(FIA_DOCUMENTS_URL, DOWNLOAD_DIRECTORY),
                 daemon=True
             )
             monitor_thread.start()
