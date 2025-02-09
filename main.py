@@ -85,8 +85,6 @@ class MurrayClient(discord.Client):
 
     async def on_message(self, message):
         """Handle incoming messages and respond to queries in the target channel."""
-        print(f"Received message in channel {message.channel.id}"
-              f"from {message.author}: {message.content}")
         if message.channel.id == TARGET_CHANNEL_ID:
             if message.author == self.user:
                 return
@@ -94,6 +92,8 @@ class MurrayClient(discord.Client):
                 return
             if message.content.strip() == "":
                 return
+            print(f"Received message in channel {message.channel.id}"
+                  f"from {message.author}: {message.content}")
             query = message.content
             async with message.channel.typing():
                 response = self.query_anythingllm(query)
@@ -118,21 +118,44 @@ class MurrayClient(discord.Client):
         print("Raw response content:", response.content)
         try:
             json_response = response.json()
-            return json_response.get('textResponse', 'No textResponse field in JSON')
+            text_response = json_response.get('textResponse', 'No textResponse field in JSON')
+            
+            # First, properly handle the escaped newlines
+            text_response = text_response.replace('\\n', '\n')
+            
+            # Remove any triple or more newlines
+            text_response = re.sub(r'\n{3,}', '\n\n', text_response)
+            
+            # Fix formatting for year comparisons
+            text_response = re.sub(r'(\*\*\d{4}:\*\*.*?)(?=\s*\*\*\d{4}:|$)', r'\1\n', text_response)
+            
+            # Ensure proper indentation and spacing for bullet points
+            text_response = re.sub(r'(?m)^(\s*)-\s*', r'   - ', text_response)
+            
+            return text_response.strip()
         except requests.exceptions.JSONDecodeError:
             return 'Failed to parse JSON response from anythingLLM'
 
 async def send_sectioned_response(message, response_content, max_length=2000):
     """Split and send a response in sections if it exceeds Discord's message length limit."""
-    sentences = re.split(r'(?<=[.!?])\s+', response_content)
-    section = ""
-    for sentence in sentences:
-        if len(section) + len(sentence) + 1 > max_length:
-            await message.reply(section.strip())
-            section = ""
-        section += " " + sentence
-    if section:
-        await message.reply(section.strip())
+    # Split on double newlines to preserve formatting
+    sections = response_content.split('\n\n')
+    current_section = ""
+    
+    for section in sections:
+        # If adding this section would exceed the limit
+        if len(current_section) + len(section) + 2 > max_length:
+            if current_section:
+                await message.reply(current_section.strip())
+            current_section = section
+        else:
+            if current_section:
+                current_section += "\n\n" + section
+            else:
+                current_section = section
+    
+    if current_section:
+        await message.reply(current_section.strip())
 
 def main():
     """Initialize and run the FIA F1 Document Monitor and Discord bot."""
