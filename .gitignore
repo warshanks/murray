@@ -5,3 +5,4 @@ documents/
 __pycache__/
 uploaded_files.json
 reference/
+.idea/
