@@ -1,7 +1,7 @@
 # Murray
 
 Murray is an AI-powered Discord bot that uses documents from the FIA to answer questions about the Formula 1.
-It is named after Murray Walker, the legendary commentator.
+It's named in honor of Murray Walker, the legendary commentator.
 
 Murray uses the AnythingLLM API to upload documents to a workspace, and then uses the workspace to answer questions.
 
