@@ -6,6 +6,7 @@ import re
 import time
 import asyncio
 import threading
+from datetime import datetime
 import discord
 import requests
 from discord.ext import commands
@@ -67,7 +68,8 @@ def monitor_documents(url: str, download_dir: str, interval: int = 300):
                         # Update workspace embeddings
                         update_workspace_embeddings(ANYTHINGLLM_WORKSPACE, moved_files)
             else:
-                print(".", end="", flush=True)
+                current_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                print(f"No new documents found at {current_time}")
 
         except Exception as e:
             print(f"\nError: {e}")
