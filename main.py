@@ -87,6 +87,8 @@ class MurrayClient(discord.Client):
                 return
             if message.content.startswith('!'):
                 return
+            if message.content.strip() == "":
+                return
             query = message.content
             async with message.channel.typing():
                 response = self.query_anythingllm(query)
