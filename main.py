@@ -13,6 +13,7 @@ from pathlib import Path
 from scraper import Scraper
 from dotenv import load_dotenv
 import os
+from upload_documents import process_new_documents, move_files_to_folder, update_workspace_embeddings, upload_documents
 
 
 # Load environment variables from .env file
@@ -43,16 +44,28 @@ def monitor_documents(url: str, download_dir: str, interval: int = 300):
     while True:
         try:
             documents = scraper.fetch_documents()
-            new_docs = False
+            new_docs = []
             
             for doc in documents:
                 if not scraper.is_document_downloaded(doc):
-                    new_docs = True
                     print(f"\nNew document found: {doc.title}")
                     print(f"Published: {doc.published}")
-                    scraper.download_document(doc)
+                    downloaded_path = scraper.download_document(doc)
+                    if downloaded_path:
+                        new_docs.append(downloaded_path)
             
-            if not new_docs:
+            if new_docs:
+                print(f"\nUploading {len(new_docs)} new documents to AnythingLLM...")
+                # Upload new documents
+                uploaded_files = process_new_documents(new_docs)
+                if uploaded_files:
+                    # Move files to murray folder
+                    moved_files = move_files_to_folder(uploaded_files, "murray")
+                    if moved_files:
+                        # Update workspace embeddings
+                        workspace_slug = os.getenv('ANYTHINGLLM_ENDPOINT').split('workspace/')[-1].split('/')[0]
+                        update_workspace_embeddings(workspace_slug, moved_files)
+            else:
                 print(".", end="", flush=True)
                 
         except Exception as e:
@@ -128,6 +141,20 @@ def main():
 
     args = parser.parse_args()
 
+    # Process any existing documents that haven't been uploaded yet
+    print("Checking for existing documents that need to be uploaded...")
+    uploaded_files = upload_documents(DOWNLOAD_DIRECTORY)
+    if uploaded_files:
+        print(f"Found and processed {len(uploaded_files)} existing documents")
+        # Move files to murray folder
+        moved_files = move_files_to_folder(uploaded_files, "murray")
+        if moved_files:
+            # Update workspace embeddings
+            workspace_slug = os.getenv('ANYTHINGLLM_ENDPOINT').split('workspace/')[-1].split('/')[0]
+            update_workspace_embeddings(workspace_slug, moved_files)
+    else:
+        print("No existing documents need to be uploaded")
+
     # Set up Discord bot
     intents = discord.Intents.all()
     client = MurrayClient(intents=intents)
@@ -137,7 +164,7 @@ def main():
         import asyncio
         
         async def start_services():
-            print("Starting document monitor...")
+            print("\nStarting document monitor...")
             # Start document monitoring in a separate thread
             import threading
             monitor_thread = threading.Thread(

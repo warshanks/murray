@@ -3,3 +3,5 @@ documents/
 .venv/
 .env
 __pycache__/
+uploaded_files.json
+reference/
