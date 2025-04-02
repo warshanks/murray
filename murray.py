@@ -1,6 +1,7 @@
 """Simplified Murray using Perplexity API"""
 import os
 import re
+import json
 import discord
 import aiohttp
 from discord.ext import commands
@@ -54,9 +55,21 @@ async def on_message(message):
         previous_messages.reverse()  # Chronological order
 
         async with message.channel.typing():
-            response, thinking = await query_perplexity(query, previous_messages)
+            response, thinking, citations = await query_perplexity(query, previous_messages)
 
-            # Send thinking content first if available and enabled
+            # Print thinking content to console if available
+            if thinking:
+                print("Thinking process:")
+                print(thinking)
+                print()
+
+            # Print citations to console if available
+            if citations:
+                print("Citations:")
+                print(citations)
+                print()
+
+            # Send thinking content as a message if available and enabled
             if thinking and SHOW_THINKING:
                 thinking_msg = f"**Thinking process:**\n\n{thinking}"
                 await send_sectioned_response(message, thinking_msg)
@@ -77,7 +90,7 @@ async def query_perplexity(query, previous_messages=None):
     messages = [
         {
             "role": "system",
-            "content": "You are Murray, a helpful expert knowledgeable in F1. Provide informative, accurate, and concise responses about F1."
+            "content": "You are Murray, a helpful expert knowledgeable in F1. Provide informative, accurate, and concise responses about F1 and only F1."
         }
     ]
 
@@ -157,9 +170,29 @@ async def query_perplexity(query, previous_messages=None):
             async with session.post(url, json=payload, headers=headers, timeout=300) as response:
                 if response.status != 200:
                     error_text = await response.text()
-                    return f'API error: Status {response.status}, Details: {error_text}', None
+                    return f'API error: Status {response.status}, Details: {error_text}', None, None
 
                 json_response = await response.json()
+
+                # Extract citations if available
+                citation_links = None
+                if "citations" in json_response:
+                    citation_links = "\n".join(json_response["citations"])
+
+                # Try to extract JSON if it's a reasoning model response
+                try:
+                    extracted_json = extract_valid_json(json_response)
+                    # If we successfully extracted structured JSON, format it appropriately
+                    if extracted_json:
+                        # Check for citations in the extracted JSON
+                        if citation_links is None and "citations" in extracted_json:
+                            citation_links = "\n".join(extracted_json["citations"])
+
+                        json_formatted = json.dumps(extracted_json, indent=2)
+                        return f"```json\n{json_formatted}\n```", None, citation_links
+                except (ValueError, json.JSONDecodeError):
+                    # If extraction fails, process as normal text response
+                    pass
 
                 # Extract the response content from Perplexity API response
                 text_response = json_response.get('choices', [{}])[0].get('message', {}).get('content', 'No response content')
@@ -189,14 +222,67 @@ async def query_perplexity(query, previous_messages=None):
 
                 # Ensure proper indentation and spacing for bullet points
                 text_response = re.sub(r'(?m)^(\s*)-\s*', r'   - ', text_response)
-                return text_response.strip(), thinking_content
+                return text_response.strip(), thinking_content, citation_links
 
     except aiohttp.ClientResponseError as e:
-        return f'HTTP error occurred: {e}', None
+        return f'HTTP error occurred: {e}', None, None
     except aiohttp.ClientError as e:
-        return f'Connection error: {e}', None
+        return f'Connection error: {e}', None, None
     except Exception as e:
-        return f'Error: {e}', None
+        return f'Error: {e}', None, None
+
+def extract_valid_json(response):
+    """
+    Extracts and returns only the valid JSON part from a response object.
+
+    This function assumes that the response has a structure where the valid JSON
+    is included in the 'content' field of the first choice's message, after the
+    closing "</think>" marker. Any markdown code fences (e.g. ```json) are stripped.
+
+    Parameters:
+        response (dict): The full API response object.
+
+    Returns:
+        dict: The parsed JSON object extracted from the content.
+
+    Raises:
+        ValueError: If no valid JSON can be parsed from the content.
+    """
+    # Navigate to the 'content' field
+    content = (
+        response
+        .get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+
+    # Find the index of the closing </think> tag.
+    marker = "</think>"
+    idx = content.rfind(marker)
+
+    if idx == -1:
+        # If marker not found, try parsing the entire content.
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError("No </think> marker found and content is not valid JSON") from e
+
+    # Extract the substring after the marker.
+    json_str = content[idx + len(marker):].strip()
+
+    # Remove markdown code fence markers if present.
+    if json_str.startswith("```json"):
+        json_str = json_str[len("```json"):].strip()
+    if json_str.startswith("```"):
+        json_str = json_str[3:].strip()
+    if json_str.endswith("```"):
+        json_str = json_str[:-3].strip()
+
+    try:
+        parsed_json = json.loads(json_str)
+        return parsed_json
+    except json.JSONDecodeError as e:
+        raise ValueError("Failed to parse valid JSON from response content") from e
 
 async def send_sectioned_response(message, response_content, max_length=2000):
     """Split and send a response in sections if it exceeds Discord's message length limit."""
