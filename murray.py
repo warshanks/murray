@@ -5,6 +5,7 @@ import json
 import discord
 import aiohttp
 from discord.ext import commands
+from discord import app_commands
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -15,7 +16,7 @@ PERPLEXITY_API_KEY = os.getenv('PERPLEXITY_API_KEY')
 PERPLEXITY_MODEL = os.getenv('PERPLEXITY_MODEL', 'sonar-reasoning')
 PERPLEXITY_API_URL = os.getenv('PERPLEXITY_API_URL', 'https://api.perplexity.ai/chat/completions')
 TARGET_CHANNEL_ID = int(os.getenv('TARGET_CHANNEL_ID'))  # Convert to integer
-SHOW_THINKING = os.getenv('SHOW_THINKING', 'false').lower() == 'true'  # Default to false
+SHOW_THINKING = os.getenv('SHOW_THINKING')
 
 # Validate configuration
 print("Environment variable check:")
@@ -28,11 +29,39 @@ print(f"SHOW_THINKING: {SHOW_THINKING}")
 
 bot = commands.Bot(command_prefix='~', intents=discord.Intents.all())
 
+# Add app commands to the bot
+@bot.tree.command(name="clear")
+@app_commands.describe(limit="Number of messages to delete (default: 100)")
+async def clear(interaction: discord.Interaction, limit: int = 100):
+    """Clears messages from the current channel."""
+    # Check if the user has the required permissions
+    if not interaction.channel.permissions_for(interaction.user).manage_messages:
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    # Defer the response to allow for longer processing time
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        # Delete messages from the channel
+        deleted = await interaction.channel.purge(limit=limit)
+        await interaction.followup.send(f"Successfully deleted {len(deleted)} messages.", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send("I don't have permission to delete messages in this channel.", ephemeral=True)
+    except discord.HTTPException as e:
+        await interaction.followup.send(f"Failed to delete messages: {str(e)}", ephemeral=True)
+
 # Add event handlers to the bot
 @bot.event
 async def on_ready():
     """Called when the client is done preparing data received from Discord."""
     print(f'Logged in as {bot.user}')
+    # Sync the commands with Discord
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
 
 @bot.event
 async def on_message(message):
@@ -49,6 +78,7 @@ async def on_message(message):
             return
 
         query = message.content
+        print(f"{message.author}: {message.content}")
 
         # Get conversation history
         previous_messages = [msg async for msg in message.channel.history(limit=10)]
@@ -284,7 +314,7 @@ def extract_valid_json(response):
     except json.JSONDecodeError as e:
         raise ValueError("Failed to parse valid JSON from response content") from e
 
-async def send_sectioned_response(message, response_content, max_length=2000):
+async def send_sectioned_response(message, response_content, max_length=1999):
     """Split and send a response in sections if it exceeds Discord's message length limit."""
     # Split on double newlines to preserve formatting
     sections = response_content.split('\n\n')
@@ -313,7 +343,7 @@ async def send_sectioned_response(message, response_content, max_length=2000):
 
 def main():
     """Initialize and run the Discord bot for Murray."""
-    print("Starting Murray Discord bot...")
+    print("Starting Murray...")
     print(f"Show thinking content: {SHOW_THINKING}")
 
     try:
