@@ -10,7 +10,7 @@ load_dotenv()
 
 GOOGLE_KEY = os.getenv("GOOGLE_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")
+TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID"))
 
 model_id = "gemini-2.5-pro-exp-03-25"
 google_search_tool = Tool(
@@ -47,6 +47,22 @@ async def clear(interaction: discord.Interaction, limit: int = 100):
         await interaction.followup.send("I don't have permission to delete messages in this channel.", ephemeral=True)
     except discord.HTTPException as e:
         await interaction.followup.send(f"Failed to delete messages: {str(e)}", ephemeral=True)
+
+@bot.tree.command(name="model")
+@app_commands.describe(new_model_id="New model ID to use for Gemini API")
+async def change_model(interaction: discord.Interaction, new_model_id: str):
+    """Changes the Gemini model being used."""
+    global model_id
+
+    # Check if the user has the required permissions (admin only)
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Only administrators can change the model.", ephemeral=True)
+        return
+
+    old_model = model_id
+    model_id = new_model_id
+
+    await interaction.response.send_message(f"Model changed from `{old_model}` to `{new_model_id}`", ephemeral=True)
 
 @bot.event
 async def on_ready():
