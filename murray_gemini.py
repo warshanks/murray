@@ -153,6 +153,10 @@ async def on_message(message):
                 model=chat_model_id,
                 history=formatted_history,
                 config=GenerateContentConfig(
+                    system_instruction=(
+                        "Your name is Murray, you are named after legendary F1 commentator Murray Walker. "
+                        "You are knowledgeable about F1 and you can answer questions about it."
+                    ),
                     tools=[google_search_tool],
                     response_modalities=["TEXT"]
                 )
