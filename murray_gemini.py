@@ -1,3 +1,9 @@
+"""Murray - F1 information bot using Google Gemini API
+
+This implementation of Murray uses the Google Gemini API to provide F1-related information
+through a Discord bot interface. Named after legendary F1 commentator Murray Walker.
+Also supports image generation capabilities.
+"""
 from google import genai
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch, Content, Part
 from dotenv import load_dotenv
@@ -23,6 +29,8 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 # Use separate models for text chat and image generation
 chat_model_id = "gemini-2.5-pro-exp-03-25"
 image_model_id = "imagen-3.0-generate-002"
+
+# Initialize Google Search tool
 google_search_tool = Tool(
     google_search = GoogleSearch()
 )
@@ -33,10 +41,11 @@ print(f"DISCORD_TOKEN present: {bool(DISCORD_TOKEN)}")
 print(f"GOOGLE_KEY present: {bool(GOOGLE_KEY)}")
 print(f"TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
 
+# Initialize Discord bot and Google client
 bot = commands.Bot(command_prefix="~", intents=discord.Intents.all())
 google_client = genai.Client(api_key=GOOGLE_KEY)
 
-# Add app commands to the bot
+
 @bot.tree.command(name="clear")
 @app_commands.describe(limit="Number of messages to delete (default: 100)")
 async def clear(interaction: discord.Interaction, limit: int = 100):
@@ -85,10 +94,11 @@ async def generate_image(interaction: discord.Interaction, prompt: str):
         await interaction.followup.send(f"Generated image based on: {prompt}", file=discord.File(image_path))
     except Exception as e:
         print(f"Error generating image: {e}")
-        await interaction.followup.send(f"Failed to generate image: {str(e)}")
+        await interaction.followup.send(file=discord.File(os.path.join(IMAGES_DIR, "no.jpg")))
 
 @bot.event
 async def on_ready():
+    """Called when the client is done preparing data received from Discord."""
     print(f"Logged in as {bot.user}")
     try:
         synced = await bot.tree.sync()
@@ -121,11 +131,11 @@ async def on_message(message):
                     await message.reply(f"Here's your image:", file=discord.File(image_path))
                 except Exception as e:
                     print(f"Error generating image: {e}")
-                    await message.reply(f"Sorry, I couldn't generate that image: {str(e)}")
+                    await message.reply(file=discord.File(os.path.join(IMAGES_DIR, "no.jpg")))
             return
 
         previous_messages = [msg async for msg in message.channel.history(limit=15)]
-        previous_messages.reverse()
+        previous_messages.reverse()  # Chronological order
 
         # Format history for Gemini API
         formatted_history = []
@@ -190,32 +200,61 @@ async def on_message(message):
                     await message.reply("I'm sorry, I encountered an error while generating a response.")
 
 async def generate_and_save_image(prompt):
-    """Generate an image using Gemini API and save it to the images directory."""
-    response = google_client.models.generate_images(
-        model=image_model_id,
-        prompt=prompt,
-        config=genai.types.GenerateImagesConfig(
-            number_of_images=1,
-            aspect_ratio="16:9"
+    """Generate an image using Gemini API and save it to the images directory.
+
+    Args:
+        prompt (str): The text description of the image to generate
+
+    Returns:
+        str: The file path of the saved image
+
+    Raises:
+        Exception: If no image was generated or an error occurred
+    """
+    try:
+        response = google_client.models.generate_images(
+            model=image_model_id,
+            prompt=prompt,
+            config=genai.types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="16:9"
+            )
         )
-    )
 
-    # Create a unique filename with timestamp and UUID
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    unique_id = str(uuid.uuid4())[:8]
-    filename = f"{timestamp}_{unique_id}.png"
-    image_path = os.path.join(IMAGES_DIR, filename)
+        # Create a unique filename with timestamp and UUID
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"{timestamp}_{unique_id}.png"
+        image_path = os.path.join(IMAGES_DIR, filename)
 
-    # Save the image
-    for generated_image in response.generated_images:
-        image = Image.open(BytesIO(generated_image.image.image_bytes))
-        image.save(image_path)
-        return image_path
+        # Save the image
+        for generated_image in response.generated_images:
+            image = Image.open(BytesIO(generated_image.image.image_bytes))
+            image.save(image_path)
+            return image_path
 
-    raise Exception("No image was generated in the response")
+        # If we get here, no images were generated
+        print("ERROR: No images were generated in the response")
+        print(f"Full API response: {response}")
+        print(f"Response object details: {dir(response)}")
+        raise Exception("No image was generated in the response")
+    except Exception as e:
+        print(f"Exception in image generation: {type(e).__name__}: {str(e)}")
+        if "'NoneType' object is not iterable" in str(e):
+            print(f"Full API response that caused NoneType error: {response}")
+            print(f"Response object details: {dir(response)}")
+        if hasattr(e, 'response'):
+            print(f"Response in exception: {e.response}")
+        raise
 
 async def send_sectioned_response(message, response_content, max_length=1999):
-    """Split and send a response in sections if it exceeds Discord's message length limit."""
+    """Split and send a response in sections if it exceeds Discord's message length limit.
+
+    Args:
+        message (discord.Message): The original message to reply to
+        response_content (str): The content to send
+        max_length (int, optional): Maximum length per message. Defaults to 1999.
+    """
     # Split on double newlines to preserve formatting
     sections = response_content.split('\n\n')
     current_section = ""
@@ -243,7 +282,7 @@ async def send_sectioned_response(message, response_content, max_length=1999):
 
 def main():
     """Initialize and run the Discord bot for Murray."""
-    print("Starting Murray...")
+    print("Starting Murray with Gemini...")
 
     try:
         # Run the Discord bot

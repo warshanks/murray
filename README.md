@@ -1,21 +1,21 @@
 # Murray
 
-Murray is an AI-powered Discord bot that monitors and analyzes official FIA Formula 1 documents in real-time. Named in honor of Murray Walker, this bot answers questions by providing intelligent answers to questions about F1 regulations, decisions, and technical documents.
+Murray is an AI-powered Discord bot that answers questions about Formula 1. Named in honor of Murray Walker, this bot provides intelligent answers to F1-related questions using either the Perplexity API or Google's Gemini API.
 
 ## Features 🌟
 
-- **Real-time Document Monitoring**: Automatically fetches and processes new FIA documents as they're published
-- **Intelligent Q&A**: Uses AnythingLLM to provide context-aware answers about F1 regulations and decisions
-- **Discord Integration**: Seamlessly integrates with Discord for easy access to F1 document insights
-- **Document Management**: Automatically organizes, vectorizes and embeds new documents for quick retrieval
+- **Intelligent F1 Q&A**: Provides knowledgeable answers about F1 history, regulations, teams, drivers, and more
+- **Discord Integration**: Seamlessly integrates with Discord for easy access to F1 information
+- **Context-Aware Conversations**: Maintains conversation history for more coherent dialogue
 - **Smart Response Formatting**: Handles long responses by breaking them into sections
-
+- **Multiple AI Options**: Choose between Perplexity API or Google's Gemini API implementations
+- **Image Generation**: With the Gemini implementation, generate images on request
 
 ## Prerequisites 📋
 
 - Python 3.8 or higher
 - Discord Bot Token (from [Discord Developer Portal](https://discord.com/developers/applications))
-- AnythingLLM API access
+- Either a Perplexity API key or a Google API key for Gemini
 - Discord Server with a designated channel for the bot
 
 ## Installation 🔧
@@ -45,16 +45,26 @@ pip install -r requirements.txt
 
 4. Create a `.env` file in the root directory with the following configuration:
 
+For Perplexity implementation:
 ```env
 # Discord Configuration
 DISCORD_TOKEN=your_discord_bot_token
 TARGET_CHANNEL_ID=your_channel_id
 
-# AnythingLLM Configuration
-ANYTHINGLLM_API_KEY=your_api_key
-ANYTHINGLLM_BASE_URL=your_base_url
-ANYTHINGLLM_ENDPOINT=${ANYTHINGLLM_BASE_URL}/workspace/murray/chat
-ANYTHINGLLM_WORKSPACE=murray
+# Perplexity Configuration
+PERPLEXITY_API_KEY=your_perplexity_api_key
+PERPLEXITY_MODEL=sonar-reasoning # Models from: https://docs.perplexity.ai/guides/model-cards
+SHOW_THINKING=false  # Optional: Set to display thinking process in Discord
+```
+
+For Gemini implementation:
+```env
+# Discord Configuration
+DISCORD_TOKEN=your_discord_bot_token
+TARGET_CHANNEL_ID=your_channel_id
+
+# Google Configuration
+GOOGLE_KEY=your_google_api_key
 ```
 
 ## Usage 🚀
@@ -67,26 +77,29 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-2. Start the bot:
+2. Start the bot with your preferred implementation:
+
+For Perplexity:
 ```bash
-python main.py
+python murray_perplexity.py
 ```
 
-3. The bot will automatically:
-   - Monitor the FIA website for new F1 documents
-   - Download and process new documents
-   - Update the AnythingLLM workspace with new information
+For Gemini:
+```bash
+python murray_gemini.py
+```
 
-4. Interact with the bot in your Discord channel:
-   - Simply ask questions about F1 regulations or recent decisions
-   - The bot will respond with relevant information from the FIA documents
+3. Interact with the bot in your Discord channel:
+   - Simply ask questions about F1
+   - For Gemini implementation, you can generate images with "generate image: [description]" or "create image: [description]"
+   - Use the `/clear` command to delete messages in the channel (requires permissions)
+   - With Gemini, use the `/model` command to change the model (admin only)
 
 ## Project Structure 📁
 
-- `main.py`: Core bot functionality and document monitoring
-- `scraper.py`: FIA website document scraping functionality
-- `upload_documents.py`: Document processing and AnythingLLM integration
-- `documents/`: Directory for storing downloaded FIA documents
+- `murray_perplexity.py`: Murray implementation using Perplexity API
+- `murray_gemini.py`: Murray implementation using Google's Gemini API
+- `images/`: Directory for storing generated images (Gemini implementation)
 - `requirements.txt`: Python dependencies
 
 ## Contributing 🤝

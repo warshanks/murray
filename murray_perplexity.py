@@ -1,4 +1,8 @@
-"""Simplified Murray using Perplexity API"""
+"""Murray - F1 information bot using Perplexity API
+
+This implementation of Murray uses the Perplexity API to provide F1-related information
+through a Discord bot interface. Named after legendary F1 commentator Murray Walker.
+"""
 import os
 import re
 import json
@@ -108,7 +112,15 @@ async def on_message(message):
             await send_sectioned_response(message, response)
 
 async def query_perplexity(query, previous_messages=None):
-    """Query the Perplexity API with the given message and return the response."""
+    """Query the Perplexity API with the given message and conversation history.
+
+    Args:
+        query (str): The current user query
+        previous_messages (list, optional): List of previous discord.Message objects
+
+    Returns:
+        tuple: (response text, thinking content, citations)
+    """
     url = PERPLEXITY_API_URL
 
     headers = {
@@ -263,20 +275,16 @@ async def query_perplexity(query, previous_messages=None):
 
 def extract_valid_json(response):
     """
-    Extracts and returns only the valid JSON part from a response object.
+    Extracts and returns the valid JSON part from a Perplexity response object.
 
-    This function assumes that the response has a structure where the valid JSON
-    is included in the 'content' field of the first choice's message, after the
-    closing "</think>" marker. Any markdown code fences (e.g. ```json) are stripped.
-
-    Parameters:
-        response (dict): The full API response object.
+    Args:
+        response (dict): The full API response object
 
     Returns:
-        dict: The parsed JSON object extracted from the content.
+        dict: The parsed JSON object extracted from the content
 
     Raises:
-        ValueError: If no valid JSON can be parsed from the content.
+        ValueError: If no valid JSON can be parsed from the content
     """
     # Navigate to the 'content' field
     content = (
@@ -315,7 +323,13 @@ def extract_valid_json(response):
         raise ValueError("Failed to parse valid JSON from response content") from e
 
 async def send_sectioned_response(message, response_content, max_length=1999):
-    """Split and send a response in sections if it exceeds Discord's message length limit."""
+    """Split and send a response in sections if it exceeds Discord's message length limit.
+
+    Args:
+        message (discord.Message): The original message to reply to
+        response_content (str): The content to send
+        max_length (int, optional): Maximum length per message. Defaults to 1999.
+    """
     # Split on double newlines to preserve formatting
     sections = response_content.split('\n\n')
     current_section = ""
@@ -343,7 +357,7 @@ async def send_sectioned_response(message, response_content, max_length=1999):
 
 def main():
     """Initialize and run the Discord bot for Murray."""
-    print("Starting Murray...")
+    print("Starting Murray (Perplexity implementation)...")
     print(f"Show thinking content: {SHOW_THINKING}")
 
     try:
