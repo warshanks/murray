@@ -7,11 +7,14 @@ import asyncio
 import datetime
 import os
 import uuid
+import re
 from io import BytesIO
 
 import discord
+from discord import app_commands
 from PIL import Image
 from google import genai
+from google.genai.types import Part, FileData
 
 # Create images directory if it doesn't exist
 IMAGES_DIR = "./images"
@@ -29,7 +32,6 @@ async def keep_typing(channel):
     print(f"Starting typing indicator in channel {channel.id}")
     try:
         while True:
-            print(f"Sending typing indicator to channel {channel.id}")
             async with channel.typing():  # Use async with context manager
                 await asyncio.sleep(5)  # Sleep less than 10 seconds to ensure continuous typing
     except asyncio.CancelledError:
@@ -163,3 +165,102 @@ async def send_sectioned_response(message, response_content, max_length=1000):
             print(f"Error sending message section {i+1}/{len(final_messages)}: {e}")
             # If sending fails, try to continue with remaining sections
             continue
+
+def parse_youtube_links(message_text):
+    """Parse a message to extract YouTube links and prepare parts for Gemini API.
+
+    This function detects YouTube links in a message and prepares the message
+    content as separate parts for the Gemini API (text content and YouTube video).
+
+    Args:
+        message_text (str): The message text to parse
+
+    Returns:
+        list or str: If YouTube links are found, returns a list of Part objects.
+                     If no links are found, returns the original message text.
+    """
+    # Pattern to match YouTube links
+    youtube_pattern = r'(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]+)(\S*)'
+    youtube_match = re.search(youtube_pattern, message_text)
+
+    if youtube_match:
+        # If YouTube link is found, extract it
+        youtube_url = youtube_match.group(0)
+        # Extract text without the URL
+        text_content = re.sub(youtube_pattern, '', message_text).strip()
+
+        print(f"YouTube link detected: {youtube_url}")
+
+        # Create parts with both text and YouTube link
+        parts = []
+        if text_content:
+            parts.append(Part(text=text_content))
+        parts.append(Part(file_data=FileData(file_uri=youtube_url)))
+
+        return parts
+    else:
+        # No YouTube links found, return original message
+        return message_text
+
+def register_model_command(bot, module_globals):
+    """Register the model change command with a Discord bot.
+
+    Args:
+        bot (commands.Bot): The Discord bot instance
+        module_globals (dict): The globals dictionary from the calling module
+    """
+    @bot.tree.command(name="model")
+    @app_commands.describe(new_model_id="New model ID to use for Gemini API or shorthand ('flash', 'pro')")
+    async def change_model(interaction: discord.Interaction, new_model_id: str):
+        """Changes the Gemini chat model being used."""
+        # Check if the user has the required permissions (admin only)
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Only administrators can change the model.", ephemeral=True)
+            return
+
+        # Handle shorthand model names
+        model_mapping = {
+            "flash": "gemini-2.0-flash",
+            "pro": "gemini-2.5-pro-exp-03-25"
+        }
+
+        # Map the shorthand to the full model name if applicable
+        actual_model_id = model_mapping.get(new_model_id.lower(), new_model_id)
+
+        old_model = module_globals["chat_model_id"]
+        module_globals["chat_model_id"] = actual_model_id
+
+        await interaction.response.send_message(f"Chat model changed from `{old_model}` to `{actual_model_id}`", ephemeral=True)
+
+def register_clear_command(bot, target_channel_id):
+    """Register the clear command with a Discord bot.
+
+    Args:
+        bot (commands.Bot): The Discord bot instance
+        target_channel_id (int): The ID of the channel where message deletion is allowed
+    """
+    @bot.tree.command(name="clear")
+    @app_commands.describe(limit="Number of messages to delete (default: 100)")
+    async def clear(interaction: discord.Interaction, limit: int = 100):
+        """Clears messages from the bot's designated channel."""
+        # Check if this is the target channel
+        if interaction.channel.id != target_channel_id:
+            await interaction.response.send_message("This command can only be used in the bot's designated channel.", ephemeral=True)
+            return
+
+        # Check if the user has the required permissions
+        if not interaction.channel.permissions_for(interaction.user).manage_messages:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        # Defer the response to allow for longer processing time
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # Delete messages from the channel
+            deleted = await interaction.channel.purge(limit=limit)
+            await interaction.followup.send(f"Successfully deleted {len(deleted)} messages.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("I don't have permission to delete messages in this channel.", ephemeral=True)
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"Failed to delete messages: {str(e)}", ephemeral=True)
