@@ -11,10 +11,10 @@ import os
 import discord
 from discord.ext import commands
 from discord import app_commands
-from PIL import Image
-from io import BytesIO
-import uuid
-import datetime
+import asyncio
+
+# Import utility functions from our library
+from utils import generate_and_save_image, send_sectioned_response, keep_typing
 
 load_dotenv()
 
@@ -44,7 +44,6 @@ print(f"TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
 # Initialize Discord bot and Google client
 bot = commands.Bot(command_prefix="~", intents=discord.Intents.all())
 google_client = genai.Client(api_key=GOOGLE_KEY)
-
 
 @bot.tree.command(name="clear")
 @app_commands.describe(limit="Number of messages to delete (default: 100)")
@@ -90,7 +89,7 @@ async def generate_image(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer(thinking=True)
 
     try:
-        image_path = await generate_and_save_image(prompt)
+        image_path = await generate_and_save_image(prompt, google_client, image_model_id)
         await interaction.followup.send(f"Generated image based on: {prompt}", file=discord.File(image_path))
     except Exception as e:
         print(f"Error generating image: {e}")
@@ -121,17 +120,30 @@ async def on_message(message):
             return
 
         query = message.content
+        print(f"Processing message: '{query[:30]}...' in channel {message.channel.id}")
 
         # Check if this is an image generation request
         if query.lower().startswith("generate image:") or query.lower().startswith("create image:"):
-            async with message.channel.typing():
+            # Start continuous typing in the background
+            typing_task = asyncio.create_task(keep_typing(message.channel))
+
+            try:
                 prompt = query.split(":", 1)[1].strip()
                 try:
-                    image_path = await generate_and_save_image(prompt)
+                    print(f"Generating image for prompt: {prompt[:30]}...")
+                    image_path = await generate_and_save_image(prompt, google_client, image_model_id)
+                    # Cancel typing before sending the response
+                    typing_task.cancel()
                     await message.reply(f"Here's your image:", file=discord.File(image_path))
                 except Exception as e:
                     print(f"Error generating image: {e}")
+                    # Cancel typing before sending the response
+                    typing_task.cancel()
                     await message.reply(file=discord.File(os.path.join(IMAGES_DIR, "no.jpg")))
+            except Exception as e:
+                # Make sure to cancel the typing task even if an error occurs
+                typing_task.cancel()
+                raise e
             return
 
         previous_messages = [msg async for msg in message.channel.history(limit=15)]
@@ -158,7 +170,12 @@ async def on_message(message):
             # we don't send any history to the API
             formatted_history = []
 
+        # Start continuous typing in the background
+        typing_task = asyncio.create_task(keep_typing(message.channel))
+
         try:
+            # Create chat in the main thread
+            print("Creating Gemini chat")
             chat = google_client.chats.create(
                 model=chat_model_id,
                 history=formatted_history,
@@ -172,14 +189,32 @@ async def on_message(message):
                 )
             )
 
-            async with message.channel.typing():
-                try:
-                    response = chat.send_message(query)
-                    response_content = response.text
-                    await send_sectioned_response(message, response_content)
-                except Exception as e:
-                    print(f"Error generating response: {e}")
-                    await message.reply("I'm sorry, I encountered an error while generating a response.")
+            try:
+                # Run the API call in a separate thread to prevent blocking the event loop
+                print("Sending message to Gemini (non-blocking)")
+
+                # Define a function to run in a separate thread
+                def run_gemini_query(chat, query_text):
+                    print("Starting Gemini query in separate thread")
+                    response = chat.send_message(query_text)
+                    print("Gemini query completed in thread")
+                    return response
+
+                # Run the function in a separate thread
+                response = await asyncio.to_thread(run_gemini_query, chat, query)
+
+                response_content = response.text
+                print(f"Got response from Gemini, length: {len(response_content)}")
+
+                # Cancel typing before sending the response
+                typing_task.cancel()
+                await send_sectioned_response(message, response_content)
+                print("Response sent to Discord")
+            except Exception as e:
+                print(f"Error generating response: {e}")
+                # Cancel typing before sending the error message
+                typing_task.cancel()
+                await message.reply("I'm sorry, I encountered an error while generating a response.")
         except ValueError as e:
             print(f"Error with chat history: {e}")
             # Try again with no history
@@ -190,95 +225,33 @@ async def on_message(message):
                     response_modalities=["TEXT"]
                 )
             )
-            async with message.channel.typing():
-                try:
-                    response = chat.send_message(query)
-                    response_content = response.text
-                    await send_sectioned_response(message, response_content)
-                except Exception as e:
-                    print(f"Error generating response (retry): {e}")
-                    await message.reply("I'm sorry, I encountered an error while generating a response.")
+            try:
+                print("Retrying Gemini with no history")
 
-async def generate_and_save_image(prompt):
-    """Generate an image using Gemini API and save it to the images directory.
+                # Run the API call in a separate thread
+                def run_retry_query(chat, query_text):
+                    print("Starting retry Gemini query in separate thread")
+                    response = chat.send_message(query_text)
+                    print("Retry Gemini query completed in thread")
+                    return response
 
-    Args:
-        prompt (str): The text description of the image to generate
+                # Run the function in a separate thread
+                response = await asyncio.to_thread(run_retry_query, chat, query)
 
-    Returns:
-        str: The file path of the saved image
-
-    Raises:
-        Exception: If no image was generated or an error occurred
-    """
-    try:
-        response = google_client.models.generate_images(
-            model=image_model_id,
-            prompt=prompt,
-            config=genai.types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="16:9"
-            )
-        )
-
-        # Create a unique filename with timestamp and UUID
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        filename = f"{timestamp}_{unique_id}.png"
-        image_path = os.path.join(IMAGES_DIR, filename)
-
-        # Save the image
-        for generated_image in response.generated_images:
-            image = Image.open(BytesIO(generated_image.image.image_bytes))
-            image.save(image_path)
-            return image_path
-
-        # If we get here, no images were generated
-        print("ERROR: No images were generated in the response")
-        print(f"Full API response: {response}")
-        print(f"Response object details: {dir(response)}")
-        raise Exception("No image was generated in the response")
-    except Exception as e:
-        print(f"Exception in image generation: {type(e).__name__}: {str(e)}")
-        if "'NoneType' object is not iterable" in str(e):
-            print(f"Full API response that caused NoneType error: {response}")
-            print(f"Response object details: {dir(response)}")
-        if hasattr(e, 'response'):
-            print(f"Response in exception: {e.response}")
-        raise
-
-async def send_sectioned_response(message, response_content, max_length=1999):
-    """Split and send a response in sections if it exceeds Discord's message length limit.
-
-    Args:
-        message (discord.Message): The original message to reply to
-        response_content (str): The content to send
-        max_length (int, optional): Maximum length per message. Defaults to 1999.
-    """
-    # Split on double newlines to preserve formatting
-    sections = response_content.split('\n\n')
-    current_section = ""
-
-    for i, section in enumerate(sections):
-        # If adding this section would exceed the limit
-        if len(current_section) + len(section) + 2 > max_length:
-            if current_section:
-                try:
-                    await message.reply(current_section.strip())
-                except Exception as e:
-                    print(f"Error sending section: {e}")
-            current_section = section
-        else:
-            if current_section:
-                current_section += "\n\n" + section
-            else:
-                current_section = section
-
-    if current_section:
-        try:
-            await message.reply(current_section.strip())
+                response_content = response.text
+                # Cancel typing before sending the response
+                typing_task.cancel()
+                await send_sectioned_response(message, response_content)
+            except Exception as e:
+                print(f"Error generating response (retry): {e}")
+                # Cancel typing before sending the error message
+                typing_task.cancel()
+                await message.reply("I'm sorry, I encountered an error while generating a response.")
         except Exception as e:
-            print(f"Error sending final section: {e}")
+            # Make sure to cancel the typing task even if an error occurs
+            typing_task.cancel()
+            print(f"Exception during Gemini response: {e}")
+            raise e
 
 def main():
     """Initialize and run the Discord bot for Murray."""
