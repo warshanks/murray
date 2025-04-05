@@ -2,4 +2,4 @@ discord.py
 aiohttp
 python-dotenv
 pillow
-google-generativeai
+google-genai
