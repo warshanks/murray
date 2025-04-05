@@ -12,9 +12,11 @@ from io import BytesIO
 
 import discord
 from discord import app_commands
+from discord.ext import commands
 from PIL import Image
 from google import genai
-from google.genai.types import Part, FileData
+from google.genai.types import Part, FileData, Tool, GenerateContentConfig, GoogleSearch, Content
+from dotenv import load_dotenv
 
 # Create images directory if it doesn't exist
 IMAGES_DIR = "./images"
@@ -264,3 +266,367 @@ def register_clear_command(bot, target_channel_id):
             await interaction.followup.send("I don't have permission to delete messages in this channel.", ephemeral=True)
         except discord.HTTPException as e:
             await interaction.followup.send(f"Failed to delete messages: {str(e)}", ephemeral=True)
+
+def initialize_bot(bot_name, discord_token, google_key, target_channel_id, google_client, chat_model_id, image_model_id):
+    """Initialize Discord bot with necessary settings.
+
+    Args:
+        bot_name (str): Name of the bot
+        discord_token (str): Discord token for authentication
+        google_key (str): Google API key
+        target_channel_id (int): Channel ID for bot operations
+        google_client (genai.Client): The Google Gemini API client
+        chat_model_id (str): Model ID for chat functionality
+        image_model_id (str): Model ID for image generation
+
+    Returns:
+        tuple: (bot, google_client, google_search_tool) - Initialized bot and tools
+    """
+    # Validate configuration
+    print(f"Starting {bot_name}...")
+    print("Environment variable check:")
+    print(f"DISCORD_TOKEN present: {bool(discord_token)}")
+    print(f"GOOGLE_KEY present: {bool(google_key)}")
+    print(f"TARGET_CHANNEL_ID: {target_channel_id}")
+
+    # Initialize Discord bot with all intents
+    bot = commands.Bot(command_prefix="~", intents=discord.Intents.all())
+
+    # Initialize Google Search tool
+    google_search_tool = Tool(
+        google_search = GoogleSearch()
+    )
+
+    # Register the image generation command
+    @bot.tree.command(name="image")
+    @app_commands.describe(prompt="Description of the image you want to generate")
+    async def generate_image(interaction: discord.Interaction, prompt: str):
+        """Generates an image using Gemini API based on the provided prompt."""
+        await interaction.response.defer(thinking=True)
+
+        try:
+            image_path = await generate_and_save_image(prompt, google_client, image_model_id)
+            await interaction.followup.send(f"Generated image based on: {prompt}", file=discord.File(image_path))
+        except Exception as e:
+            print(f"Error generating image: {e}")
+            await interaction.followup.send(file=discord.File(os.path.join(IMAGES_DIR, "no.jpg")))
+
+    # Register on_ready event
+    @bot.event
+    async def on_ready():
+        """Called when the client is done preparing data received from Discord."""
+        print(f"Logged in as {bot.user}")
+        try:
+            synced = await bot.tree.sync()
+            print(f"Synced {len(synced)} command(s)")
+        except Exception as e:
+            print(f"Failed to sync commands: {e}")
+
+    return bot, google_client, google_search_tool
+
+async def handle_image_request(message, query, google_client, image_model_id):
+    """Handle image generation requests from text messages.
+
+    Args:
+        message (discord.Message): The original message requesting image generation
+        query (str): The message content with the image request
+        google_client (genai.Client): The Google Gemini API client
+        image_model_id (str): Model ID to use for image generation
+
+    Returns:
+        bool: True if it was an image request and was handled, False otherwise
+    """
+    if query.lower().startswith("generate image:") or query.lower().startswith("create image:"):
+        # Start continuous typing in the background
+        typing_task = asyncio.create_task(keep_typing(message.channel))
+
+        try:
+            prompt = query.split(":", 1)[1].strip()
+            try:
+                print(f"Generating image for prompt: {prompt[:30]}...")
+                image_path = await generate_and_save_image(prompt, google_client, image_model_id)
+                # Cancel typing before sending the response
+                typing_task.cancel()
+                await message.reply(f"Here's your image:", file=discord.File(image_path))
+            except Exception as e:
+                print(f"Error generating image: {e}")
+                # Cancel typing before sending the response
+                typing_task.cancel()
+                await message.reply(file=discord.File(os.path.join(IMAGES_DIR, "no.jpg")))
+        except Exception as e:
+            # Make sure to cancel the typing task even if an error occurs
+            typing_task.cancel()
+            print(f"Exception during image generation: {e}")
+            raise e
+        return True
+    return False
+
+async def handle_gemini_chat(message, query, bot, google_client, chat_model_id, system_instruction, google_search_tool):
+    """Handle a chat request using the Gemini API.
+
+    Args:
+        message (discord.Message): The original Discord message
+        query (str): The message content/query
+        bot (commands.Bot): The Discord bot instance
+        google_client (genai.Client): The Google Gemini API client
+        chat_model_id (str): Model ID to use for chat
+        system_instruction (str): System prompt for the model
+        google_search_tool (Tool): Google search tool for the model
+
+    Returns:
+        None
+    """
+    # Get message history
+    previous_messages = [msg async for msg in message.channel.history(limit=15)]
+    previous_messages.reverse()  # Chronological order
+
+    # Format history for Gemini API
+    formatted_history = []
+    for msg in previous_messages:
+        if msg.author == bot.user:
+            role = "model"
+        else:
+            role = "user"
+
+        formatted_history.append(
+            Content(
+                role=role,
+                parts=[Part(text=msg.content)]
+            )
+        )
+
+    # Ensure history starts with a user message
+    if not formatted_history or formatted_history[0].role != "user":
+        # If no history or first message is not from a user,
+        # we don't send any history to the API
+        formatted_history = []
+
+    # Start continuous typing in the background
+    typing_task = asyncio.create_task(keep_typing(message.channel))
+
+    try:
+        # Create chat in the main thread
+        print("Creating Gemini chat")
+        chat = google_client.chats.create(
+            model=chat_model_id,
+            history=formatted_history,
+            config=GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=[google_search_tool],
+                response_modalities=["TEXT"]
+            )
+        )
+
+        try:
+            # Run the API call in a separate thread to prevent blocking the event loop
+            print("Sending message to Gemini (non-blocking)")
+
+            # Define a function to run in a separate thread
+            def run_gemini_query(chat, query_text):
+                print("Starting Gemini query in separate thread")
+                # Check for YouTube links in the message
+                message_content = parse_youtube_links(query_text)
+                response = chat.send_message(message_content)
+                print("Gemini query completed in thread")
+                return response
+
+            # Run the function in a separate thread
+            response = await asyncio.to_thread(run_gemini_query, chat, query)
+
+            response_content = response.text
+            print(f"Got response from Gemini, length: {len(response_content)}")
+
+            # Cancel typing before sending the response
+            typing_task.cancel()
+            await send_sectioned_response(message, response_content)
+            print("Response sent to Discord")
+        except Exception as e:
+            print(f"Error generating response: {e}")
+            # Handle model overload error
+            error_str = str(e)
+            if "The model is overloaded" in error_str or "UNAVAILABLE" in error_str:
+                # If using the pro model, retry with flash model
+                if chat_model_id == "gemini-2.5-pro-exp-03-25":
+                    try:
+                        print("Pro model overloaded, retrying with flash model")
+                        fallback_chat = google_client.chats.create(
+                            model="gemini-2.0-flash",
+                            history=formatted_history,
+                            config=GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                tools=[google_search_tool],
+                                response_modalities=["TEXT"]
+                            )
+                        )
+
+                        # Run the function in a separate thread with flash model
+                        fallback_response = await asyncio.to_thread(run_gemini_query, fallback_chat, query)
+
+                        response_content = fallback_response.text
+                        print(f"Got response from Gemini Flash model, length: {len(response_content)}")
+
+                        # Cancel typing now that we have the fallback response
+                        typing_task.cancel()
+
+                        # Send response with note about using fallback model
+                        await send_sectioned_response(message, "Note: Using Flash model due to Pro model overload.\n\n" + response_content)
+                        return
+                    except Exception as fallback_e:
+                        print(f"Error with fallback model: {fallback_e}")
+                        # Now cancel typing since both models failed
+                        typing_task.cancel()
+                        await message.reply("The Gemini model is currently overloaded. Please try again later.")
+                else:
+                    # Cancel typing for non-pro model errors
+                    typing_task.cancel()
+                    await message.reply("The Gemini model is currently overloaded. Please try again later.")
+            else:
+                # Cancel typing for other errors
+                typing_task.cancel()
+                await message.reply("I'm sorry, I encountered an error while generating a response.")
+    except ValueError as e:
+        print(f"Error with chat history: {e}")
+        # Try again with no history
+        chat = google_client.chats.create(
+            model=chat_model_id,
+            config=GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=[google_search_tool],
+                response_modalities=["TEXT"]
+            )
+        )
+        try:
+            print("Retrying Gemini with no history")
+
+            # Run the API call in a separate thread
+            def run_retry_query(chat, query_text):
+                print("Starting retry Gemini query in separate thread")
+                # Check for YouTube links in the message
+                message_content = parse_youtube_links(query_text)
+                response = chat.send_message(message_content)
+                print("Retry Gemini query completed in thread")
+                return response
+
+            # Run the function in a separate thread
+            response = await asyncio.to_thread(run_retry_query, chat, query)
+
+            response_content = response.text
+            # Cancel typing before sending the response
+            typing_task.cancel()
+            await send_sectioned_response(message, response_content)
+        except Exception as e:
+            print(f"Error generating response (retry): {e}")
+            # Check for model overload error
+            error_str = str(e)
+            if "The model is overloaded" in error_str or "UNAVAILABLE" in error_str:
+                # If using the pro model, retry with flash model
+                if chat_model_id == "gemini-2.5-pro-exp-03-25":
+                    try:
+                        print("Pro model overloaded, retrying with flash model")
+                        fallback_chat = google_client.chats.create(
+                            model="gemini-2.0-flash",
+                            config=GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                tools=[google_search_tool],
+                                response_modalities=["TEXT"]
+                            )
+                        )
+
+                        # Run the API call in a separate thread
+                        def run_fallback_query(chat, query_text):
+                            print("Starting fallback Gemini query in separate thread")
+                            message_content = parse_youtube_links(query_text)
+                            response = chat.send_message(message_content)
+                            print("Fallback Gemini query completed in thread")
+                            return response
+
+                        # Run the function in a separate thread
+                        fallback_response = await asyncio.to_thread(run_fallback_query, fallback_chat, query)
+
+                        response_content = fallback_response.text
+                        print(f"Got response from fallback Gemini Flash model, length: {len(response_content)}")
+
+                        # Cancel typing now that we have the fallback response
+                        typing_task.cancel()
+
+                        # Send response with note about using fallback model
+                        await send_sectioned_response(message, "Note: Using Flash model due to Pro model overload.\n\n" + response_content)
+                        return
+                    except Exception as fallback_e:
+                        print(f"Error with fallback model: {fallback_e}")
+                        # Now cancel typing since both models failed
+                        typing_task.cancel()
+                        await message.reply("Both Gemini models are currently overloaded. Please try again later.")
+                else:
+                    # Cancel typing for non-pro model errors
+                    typing_task.cancel()
+                    await message.reply("The Gemini model is currently overloaded. Please try again later.")
+            else:
+                # Cancel typing for other errors
+                typing_task.cancel()
+                await message.reply("I'm sorry, I encountered an error while generating a response.")
+    except Exception as e:
+        # Make sure to cancel the typing task even if an error occurs
+        typing_task.cancel()
+        print(f"Exception during Gemini response: {e}")
+        raise e
+
+def register_generic_on_message_handler(bot, target_channel_id, google_client, chat_model_id, image_model_id, system_instruction, google_search_tool):
+    """Register a generic on_message event handler.
+
+    Args:
+        bot (commands.Bot): The Discord bot instance
+        target_channel_id (int): The ID of the channel to monitor
+        google_client (genai.Client): The Google Gemini API client
+        chat_model_id (str): Model ID for chat functionality
+        image_model_id (str): Model ID for image generation
+        system_instruction (str): System prompt for the model
+        google_search_tool (Tool): Google search tool for the model
+
+    Returns:
+        None
+    """
+    @bot.event
+    async def on_message(message):
+        """Handle incoming messages and respond to queries in the target channel."""
+        # Always process commands first
+        await bot.process_commands(message)
+
+        if message.channel.id == target_channel_id:
+            if message.author == bot.user:
+                return
+            if message.content.startswith('!') or message.content.startswith('~'):
+                return
+            if message.content.strip() == "":
+                return
+
+            query = message.content
+            print(f"Processing message: '{query[:30]}...' in channel {message.channel.id}")
+
+            # Check if this is an image generation request
+            if await handle_image_request(message, query, google_client, image_model_id):
+                return
+
+            # Handle regular chat messages
+            await handle_gemini_chat(message, query, bot, google_client, chat_model_id, system_instruction, google_search_tool)
+
+def run_bot(bot, discord_token, bot_name="Bot"):
+    """Run the Discord bot.
+
+    Args:
+        bot (commands.Bot): The Discord bot instance
+        discord_token (str): Discord token for authentication
+        bot_name (str, optional): Name of the bot for logging. Defaults to "Bot".
+
+    Returns:
+        None
+    """
+    print(f"Starting {bot_name}...")
+
+    try:
+        # Run the Discord bot
+        bot.run(discord_token)
+    except KeyboardInterrupt:
+        print(f"Stopping {bot_name} due to keyboard interrupt...")
+    except Exception as e:
+        print(f"Error running {bot_name}: {e}")
