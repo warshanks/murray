@@ -403,6 +403,7 @@ async def handle_gemini_chat(message, query, bot, google_client, chat_model_id, 
 
     # Start continuous typing in the background
     typing_task = asyncio.create_task(keep_typing(message.channel))
+    used_fallback = False  # Flag to track if we used fallback model
 
     try:
         # Create chat in the main thread
@@ -449,6 +450,7 @@ async def handle_gemini_chat(message, query, bot, google_client, chat_model_id, 
                 if chat_model_id == "gemini-2.5-pro-exp-03-25":
                     try:
                         print("Pro model overloaded, retrying with flash model")
+                        used_fallback = True  # Set fallback flag
                         fallback_chat = google_client.chats.create(
                             model="gemini-2.0-flash",
                             history=formatted_history,
@@ -520,7 +522,7 @@ async def handle_gemini_chat(message, query, bot, google_client, chat_model_id, 
             error_str = str(e)
             if "The model is overloaded" in error_str or "UNAVAILABLE" in error_str:
                 # If using the pro model, retry with flash model
-                if chat_model_id == "gemini-2.5-pro-exp-03-25":
+                if chat_model_id == "gemini-2.5-pro-exp-03-25" and not used_fallback:  # Only try fallback if not already tried
                     try:
                         print("Pro model overloaded, retrying with flash model")
                         fallback_chat = google_client.chats.create(
@@ -558,7 +560,7 @@ async def handle_gemini_chat(message, query, bot, google_client, chat_model_id, 
                         typing_task.cancel()
                         await message.reply("Both Gemini models are currently overloaded. Please try again later.")
                 else:
-                    # Cancel typing for non-pro model errors
+                    # Cancel typing for non-pro model errors or if fallback already tried
                     typing_task.cancel()
                     await message.reply("The Gemini model is currently overloaded. Please try again later.")
             else:
