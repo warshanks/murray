@@ -14,7 +14,16 @@ load_dotenv()
 
 GOOGLE_KEY = os.getenv("GOOGLE_KEY")
 DISCORD_TOKEN = os.getenv("KC_TOKEN")
-TARGET_CHANNEL_ID = int(os.getenv("KC_CHANNEL_ID"))
+
+# Get channel IDs from environment variables
+KC_CHANNEL_ID = int(os.getenv("KC_CHANNEL_ID"))
+# Check if additional channel IDs are specified
+ADDITIONAL_CHANNELS = os.getenv("KC_ADDITIONAL_CHANNELS", "")
+# Parse additional channel IDs and add to list
+TARGET_CHANNEL_IDS = [KC_CHANNEL_ID]
+if ADDITIONAL_CHANNELS:
+    ADDITIONAL_IDS = [int(channel_id.strip()) for channel_id in ADDITIONAL_CHANNELS.split(",") if channel_id.strip()]
+    TARGET_CHANNEL_IDS.extend(ADDITIONAL_IDS)
 
 # Create images directory if it doesn't exist
 IMAGES_DIR = "./images"
@@ -34,7 +43,7 @@ def main():
         bot_name="KC",
         discord_token=DISCORD_TOKEN,
         google_key=GOOGLE_KEY,
-        target_channel_id=TARGET_CHANNEL_ID,
+        target_channel_id=KC_CHANNEL_ID,  # Keep for backwards compatibility
         google_client=google_client,
         chat_model_id=chat_model_id,
         image_model_id=image_model_id
@@ -44,7 +53,7 @@ def main():
     register_model_command(bot, globals())
 
     # Register clear command
-    register_clear_command(bot, TARGET_CHANNEL_ID)
+    register_clear_command(bot, TARGET_CHANNEL_IDS)
 
     # KC-specific system instruction
     system_instruction = "Your name is KC. You are a helpful assistant."
@@ -52,7 +61,7 @@ def main():
     # Register message handler
     register_generic_on_message_handler(
         bot=bot,
-        target_channel_id=TARGET_CHANNEL_ID,
+        target_channel_ids=TARGET_CHANNEL_IDS,
         google_client=google_client,
         chat_model_id=chat_model_id,
         image_model_id=image_model_id,

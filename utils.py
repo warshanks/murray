@@ -58,14 +58,20 @@ async def generate_and_save_image(prompt, google_client, image_model_id):
         Exception: If no image was generated or an error occurred
     """
     try:
-        response = google_client.models.generate_images(
-            model=image_model_id,
-            prompt=prompt,
-            config=genai.types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="16:9"
+        # Run image generation in a separate thread to avoid blocking the event loop
+        def generate_image():
+            response = google_client.models.generate_images(
+                model=image_model_id,
+                prompt=prompt,
+                config=genai.types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio="16:9"
+                )
             )
-        )
+            return response
+
+        # Run the API call in a separate thread
+        response = await asyncio.to_thread(generate_image)
 
         # Create a unique filename with timestamp and UUID
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -234,20 +240,20 @@ def register_model_command(bot, module_globals):
 
         await interaction.response.send_message(f"Chat model changed from `{old_model}` to `{actual_model_id}`", ephemeral=True)
 
-def register_clear_command(bot, target_channel_id):
+def register_clear_command(bot, target_channel_ids):
     """Register the clear command with a Discord bot.
 
     Args:
         bot (commands.Bot): The Discord bot instance
-        target_channel_id (int): The ID of the channel where message deletion is allowed
+        target_channel_ids (list): List of channel IDs where message deletion is allowed
     """
     @bot.tree.command(name="clear")
     @app_commands.describe(limit="Number of messages to delete (default: 100)")
     async def clear(interaction: discord.Interaction, limit: int = 100):
-        """Clears messages from the bot's designated channel."""
-        # Check if this is the target channel
-        if interaction.channel.id != target_channel_id:
-            await interaction.response.send_message("This command can only be used in the bot's designated channel.", ephemeral=True)
+        """Clears messages from the bot's designated channels."""
+        # Check if this is one of the target channels
+        if interaction.channel.id not in target_channel_ids:
+            await interaction.response.send_message("This command can only be used in the bot's designated channels.", ephemeral=True)
             return
 
         # Check if the user has the required permissions
@@ -573,12 +579,12 @@ async def handle_gemini_chat(message, query, bot, google_client, chat_model_id, 
         print(f"Exception during Gemini response: {e}")
         raise e
 
-def register_generic_on_message_handler(bot, target_channel_id, google_client, chat_model_id, image_model_id, system_instruction, google_search_tool):
+def register_generic_on_message_handler(bot, target_channel_ids, google_client, chat_model_id, image_model_id, system_instruction, google_search_tool):
     """Register a generic on_message event handler.
 
     Args:
         bot (commands.Bot): The Discord bot instance
-        target_channel_id (int): The ID of the channel to monitor
+        target_channel_ids (list): List of channel IDs to monitor
         google_client (genai.Client): The Google Gemini API client
         chat_model_id (str): Model ID for chat functionality
         image_model_id (str): Model ID for image generation
@@ -590,11 +596,11 @@ def register_generic_on_message_handler(bot, target_channel_id, google_client, c
     """
     @bot.event
     async def on_message(message):
-        """Handle incoming messages and respond to queries in the target channel."""
+        """Handle incoming messages and respond to queries in the target channels."""
         # Always process commands first
         await bot.process_commands(message)
 
-        if message.channel.id == target_channel_id:
+        if message.channel.id in target_channel_ids:
             if message.author == bot.user:
                 return
             if message.content.startswith('!') or message.content.startswith('~'):
